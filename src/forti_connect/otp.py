@@ -182,10 +182,10 @@ def fetch_otp(config):
     Returns:
         OTP code (6 digits) or None on failure.
     """
-    browser_profile = config.get(
+    browser_profile = str(Path(config.get(
         "VPN_BROWSER_USER_DATA_DIR",
         str(Path.home() / ".vpn-otp-browser-profile"),
-    )
+    )).expanduser())
     browser_visible = config.get("VPN_BROWSER_VISIBLE", "false").lower() == "true"
     sender = config.get("VPN_OTP_SENDER", "noreply@company.com")
     wait_before_inbox = int(config.get("VPN_WAIT_BEFORE_INBOX", "7"))
