@@ -91,14 +91,12 @@ class VpnSession:
             )
             print("[vpn] OTP prompt detected, fetching OTP…", file=sys.stderr)
 
-            # Drop privileges to real user before calling Playwright
-            # (since we're running as root via sudo)
+            # Fetch OTP — run as the real user (not root) so Playwright works correctly
             sudo_user = os.environ.get("SUDO_USER")
             if sudo_user:
-                os.setuid(int(subprocess.check_output(["id", "-u", sudo_user]).decode().strip()))
-
-            # Fetch OTP
-            otp_code = otp.fetch_otp(self.config)
+                otp_code = self._fetch_otp_as_user(sudo_user)
+            else:
+                otp_code = otp.fetch_otp(self.config)
             if not otp_code:
                 raise RuntimeError("Failed to fetch OTP")
 
@@ -133,6 +131,48 @@ class VpnSession:
         except Exception as e:
             self.down()
             raise RuntimeError(f"VPN startup failed: {e}")
+
+    def _fetch_otp_as_user(self, sudo_user):
+        """Run OTP fetch in a subprocess as the real (non-root) user.
+
+        Uses sudo -u to preserve the correct HOME and permissions for the
+        Playwright browser profile while keeping this process as root so
+        we can still manage the openfortivpn child process.
+        """
+        import json
+        import tempfile
+
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+                json.dump(dict(self.config), f)
+                tmp = f.name
+            os.chmod(tmp, 0o644)
+
+            script = ";".join([
+                "import json,sys",
+                "from forti_connect.otp import fetch_otp",
+                f"c=json.load(open({json.dumps(tmp)}))",
+                "r=fetch_otp(c)",
+                "print(r,end='') if r else sys.exit(1)",
+            ])
+            timeout = (
+                int(self.config.get("VPN_OTP_TIMEOUT", "30"))
+                + int(self.config.get("VPN_WAIT_BEFORE_INBOX", "7"))
+                + 30
+            )
+            result = subprocess.run(
+                ["sudo", "-u", sudo_user, sys.executable, "-c", script],
+                stdout=subprocess.PIPE,
+                timeout=timeout,
+            )
+            return result.stdout.decode().strip() or None
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
 
     def down(self):
         """Stop VPN: terminate openfortivpn, restore DNS."""

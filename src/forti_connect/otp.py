@@ -183,7 +183,7 @@ def fetch_otp(config):
         OTP code (6 digits) or None on failure.
     """
     browser_profile = config.get(
-        "VPN_BROWSER_PROFILE",
+        "VPN_BROWSER_USER_DATA_DIR",
         str(Path.home() / ".vpn-otp-browser-profile"),
     )
     browser_visible = config.get("VPN_BROWSER_VISIBLE", "false").lower() == "true"
