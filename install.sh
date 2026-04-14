@@ -118,10 +118,9 @@ step "Step 3/5: Installing forti-connect..."
 
 if pipx list 2>/dev/null | grep -q "forti-connect"; then
     info "Already installed — upgrading..."
-    pipx upgrade forti-connect --pip-args="git+$REPO" 2>/dev/null || \
-    pipx install "git+$REPO" --force
+    pipx install forti-connect --force --pip-args="--force-reinstall git+$REPO"
 else
-    pipx install "git+$REPO"
+    pipx install forti-connect --pip-args="git+$REPO"
 fi
 
 # Ensure ~/.local/bin in PATH
@@ -192,7 +191,7 @@ echo -e "  ${BOLD}3. Disconnect:${NC}"
 echo -e "     sudo vpn down"
 echo ""
 echo -e "  ${BOLD}Upgrade later:${NC}"
-echo -e "     pipx upgrade forti-connect"
+echo -e "     pipx install forti-connect --force --pip-args=\"--force-reinstall git+$REPO\""
 echo ""
 
 # Remind to reload shell if PATH was modified

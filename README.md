@@ -1,4 +1,4 @@
-# forti-connect
+# Forti Connect
 
 Automates FortiVPN reconnection with automatic OTP retrieval from Outlook Web.
 No manual token copy-paste — connect with a single command.
@@ -31,7 +31,7 @@ Handles everything automatically: Python check, pipx, package, Playwright Firefo
 ### Manual install
 
 ```bash
-pipx install git+https://github.com/theizekry/forti-connect.git
+pipx install forti-connect --pip-args="git+https://github.com/theizekry/forti-connect.git"
 ```
 
 Requires Python 3.9+ and [pipx](https://pipx.pypa.io).
@@ -172,7 +172,7 @@ curl -fsSL https://raw.githubusercontent.com/theizekry/forti-connect/main/instal
 ## Updating
 
 ```bash
-pipx upgrade forti-connect
+pipx install forti-connect --force --pip-args="--force-reinstall git+https://github.com/theizekry/forti-connect.git"
 ```
 
 ---
