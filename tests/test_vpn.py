@@ -40,21 +40,19 @@ class TestVpnSessionUp:
         with patch("forti_connect.vpn.Path.exists", return_value=True), \
              patch("forti_connect.vpn.pexpect.spawn") as mock_spawn, \
              patch("forti_connect.vpn.otp.fetch_otp", return_value="123456"), \
-             patch("forti_connect.vpn.os.setuid"), \
-             patch("forti_connect.vpn.subprocess.check_output", return_value=b"1000"):
+             patch("forti_connect.vpn.get_dns_backend"):
 
             mock_proc = MagicMock()
             mock_spawn.return_value = mock_proc
-            mock_proc.expect.side_effect = [None, None]  # OTP prompt, then tunnel up
+            mock_proc.expect.side_effect = [None, None, None]  # OTP prompt, tunnel up, EOF
 
             session = VpnSession(config=mock_config)
             session.up()
 
-            # Verify spawn was called with correct host
+            # Verify spawn was called with the binary and --config flag
             assert mock_spawn.called
-            args, kwargs = mock_spawn.call_args
-            assert "--host=vpn.test.com" in args[1:]
-            assert "--username=testuser" in args[1:]
+            _, spawn_kwargs = mock_spawn.call_args
+            assert any("--config=" in arg for arg in spawn_kwargs.get("args", []))
 
     def test_handles_otp_prompt_and_sends_code(self, mock_config):
         with patch("forti_connect.vpn.Path.exists", return_value=True), \
@@ -66,7 +64,7 @@ class TestVpnSessionUp:
 
             mock_proc = MagicMock()
             mock_spawn.return_value = mock_proc
-            mock_proc.expect.side_effect = [None, None]
+            mock_proc.expect.side_effect = [None, None, None]  # OTP prompt, tunnel up, EOF
 
             session = VpnSession(config=mock_config)
             session.up()
@@ -86,7 +84,7 @@ class TestVpnSessionUp:
 
             mock_proc = MagicMock()
             mock_spawn.return_value = mock_proc
-            mock_proc.expect.side_effect = [None, None]
+            mock_proc.expect.side_effect = [None, None, None]  # OTP prompt, tunnel up, EOF
 
             session = VpnSession(config=mock_config)
             session.up()

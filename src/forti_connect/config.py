@@ -3,12 +3,25 @@
 Discovery order for .env:
   1. VPN_ENV environment variable (explicit override)
   2. ~/.config/forti-connect/.env
-  3. .env in current working directory
+  3. ~/.config/af-vpn/.env (legacy fallback)
+  4. .env in current working directory
 """
 
 import os
+import pwd
 from pathlib import Path
 from dotenv import dotenv_values
+
+
+def _real_home():
+    """Return the real user's home directory, accounting for sudo elevation."""
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            pass
+    return Path.home()
 
 
 def env_path():
@@ -28,12 +41,17 @@ def env_path():
             return p
         raise FileNotFoundError(f"VPN_ENV points to missing file: {p}")
 
-    # 2. ~/.config/forti-connect/.env
-    default = Path.home() / ".config" / "af-vpn" / ".env"
+    # 2. ~/.config/forti-connect/.env (real user's home, even under sudo)
+    default = _real_home() / ".config" / "forti-connect" / ".env"
     if default.exists():
         return default
 
-    # 3. .env in current directory
+    # 3. ~/.config/af-vpn/.env (legacy fallback)
+    legacy = _real_home() / ".config" / "af-vpn" / ".env"
+    if legacy.exists():
+        return legacy
+
+    # 4. .env in current directory
     cwd = Path.cwd() / ".env"
     if cwd.exists():
         return cwd
@@ -41,6 +59,7 @@ def env_path():
     raise FileNotFoundError(
         "No .env file found. Checked:\n"
         f"  {default}\n"
+        f"  {legacy}\n"
         f"  {cwd}\n"
         "Create one or set VPN_ENV=/path/to/.env"
     )
@@ -117,7 +136,7 @@ def get_config(path=None):
         "VPN_OTP_TIMEOUT":         "30",
         "VPN_OTP_POLL_INTERVAL":   "5",
         "VPN_WAIT_BEFORE_INBOX":   "7",
-        "VPN_BROWSER_USER_DATA_DIR": str(Path.home() / ".vpn-otp-browser-profile"),
+        "VPN_BROWSER_USER_DATA_DIR": str(_real_home() / ".vpn-otp-browser-profile"),
         "VPN_BROWSER_VISIBLE":     "false",
     }
 

@@ -4,12 +4,12 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pexpect
 
-from . import otp, platform
+from . import log, otp, platform
+from .log import BOLD
 from .config import get_config
 from .dns import get_dns_backend
 
@@ -22,7 +22,7 @@ class VpnSession:
         Initialize VPN session.
 
         Args:
-            config: Configuration dict. If None, loads from ~/.config/af-vpn/config.env.
+            config: Configuration dict. If None, loads from ~/.config/forti-connect/.env.
         """
         if config is None:
             config = get_config()
@@ -44,7 +44,7 @@ class VpnSession:
 
     def _signal_handler(self, signum, frame):
         """Handle SIGINT/SIGTERM: clean shutdown."""
-        print(f"\n[vpn] Received signal {signum}, cleaning up…", file=sys.stderr)
+        log.warn("Disconnecting…")
         self.down()
         sys.exit(0)
 
@@ -61,7 +61,7 @@ class VpnSession:
                 f"Install with: brew install openfortivpn (macOS) or apt install openfortivpn (Linux)"
             )
 
-        print(f"[vpn] Starting openfortivpn ({self.vpn_binary})…", file=sys.stderr)
+        log.info(f"Starting openfortivpn ({self.vpn_binary})…")
 
         # Pass the openfortivpn config file (holds host/user/password)
         vpn_config = self.config.get("VPN_CONFIG")
@@ -71,6 +71,7 @@ class VpnSession:
             f"--config={vpn_config}",
         ]
 
+        tunnel_up = False
         try:
             # Spawn openfortivpn process
             self.process = pexpect.spawn(
@@ -80,16 +81,12 @@ class VpnSession:
                 encoding="utf-8",
             )
 
-            # Optional: echo the output to stderr for debugging
-            # self.process.logfile = sys.stderr
-
-            # Watch for OTP prompt
-            print("[vpn] Waiting for OTP prompt…", file=sys.stderr)
+            log.info("Connecting to VPN gateway…")
             self.process.expect(
                 "Two-factor authentication token:",
                 timeout=30,
             )
-            print("[vpn] OTP prompt detected, fetching OTP…", file=sys.stderr)
+            log.info("OTP requested — fetching from Outlook…")
 
             # Fetch OTP — run as the real user (not root) so Playwright works correctly
             sudo_user = os.environ.get("SUDO_USER")
@@ -100,17 +97,16 @@ class VpnSession:
             if not otp_code:
                 raise RuntimeError("Failed to fetch OTP")
 
-            # Send OTP to the prompt
+            log.info(f"Submitting OTP: {BOLD}{otp_code}{log.RESET}")
             self.process.sendline(otp_code)
-            print(f"[vpn] OTP sent: {otp_code}", file=sys.stderr)
 
-            # Wait for tunnel to come up
-            print("[vpn] Waiting for tunnel to come up…", file=sys.stderr)
+            log.dim("Establishing tunnel…")
             self.process.expect(
                 "Tunnel is up and running",
                 timeout=30,
             )
-            print("[vpn] Tunnel is UP!", file=sys.stderr)
+            tunnel_up = True
+            log.ok("Tunnel is up and running.")
 
             # Apply DNS
             dns_method = self.config.get("VPN_DNS_METHOD", "auto")
@@ -118,16 +114,31 @@ class VpnSession:
                 dns_method = platform.pick_dns_method(self.os_name)
             self.config["VPN_DNS_METHOD"] = dns_method
 
-            print(f"[vpn] Applying DNS ({dns_method})…", file=sys.stderr)
+            log.info(f"Applying DNS via {dns_method}…")
             self.dns_backend = get_dns_backend(dns_method, self.config)
-            self.dns_backend.apply()
+            try:
+                self.dns_backend.apply()
+                for server in self.dns_backend.dns_servers:
+                    log.dim(f"Nameserver: {server}")
+            except Exception as dns_err:
+                log.warn(f"DNS apply failed: {dns_err}")
+                log.warn("Set VPN_DNS_METHOD=resolv in your .env to fix")
+                self.dns_backend = None
 
-            print("[vpn] VPN is ready!", file=sys.stderr)
+            log.ok("VPN connected — press Ctrl+C to disconnect.")
+
+            # Block here — keep the PTY open so openfortivpn stays alive.
+            # When the user Ctrl+C's, the signal handler calls self.down().
+            self.process.expect(pexpect.EOF, timeout=None)
 
         except pexpect.TIMEOUT as e:
+            self.down()
             raise RuntimeError(f"Timeout waiting for VPN prompt: {e}")
         except pexpect.EOF as e:
-            raise RuntimeError(f"openfortivpn process ended unexpectedly: {e}")
+            self.down()
+            if tunnel_up:
+                raise RuntimeError(f"VPN connection lost: {e}")
+            raise RuntimeError(f"openfortivpn exited unexpectedly during startup: {e}")
         except Exception as e:
             self.down()
             raise RuntimeError(f"VPN startup failed: {e}")
@@ -150,16 +161,17 @@ class VpnSession:
             os.chmod(tmp, 0o644)
 
             script = ";".join([
-                "import json,sys",
+                "import json,sys,os",
                 "from forti_connect.otp import fetch_otp",
                 f"c=json.load(open({json.dumps(tmp)}))",
                 "r=fetch_otp(c)",
-                "print(r,end='') if r else sys.exit(1)",
+                # Write OTP then force-exit — avoids hanging on browser cleanup
+                "sys.stdout.write(r or '');sys.stdout.flush();os._exit(0 if r else 1)",
             ])
             timeout = (
                 int(self.config.get("VPN_OTP_TIMEOUT", "30"))
                 + int(self.config.get("VPN_WAIT_BEFORE_INBOX", "7"))
-                + 30
+                + 60  # generous buffer for browser startup/shutdown
             )
             result = subprocess.run(
                 ["sudo", "-u", sudo_user, sys.executable, "-c", script],
@@ -177,15 +189,15 @@ class VpnSession:
     def down(self):
         """Stop VPN: terminate openfortivpn, restore DNS."""
         if self.dns_backend:
-            print("[vpn] Restoring DNS…", file=sys.stderr)
+            log.info("Restoring DNS…")
             try:
                 self.dns_backend.restore()
             except Exception as e:
-                print(f"[vpn] Warning: DNS restore failed: {e}", file=sys.stderr)
+                log.warn(f"DNS restore failed: {e}")
             self.dns_backend = None
 
         if self.process:
-            print("[vpn] Terminating openfortivpn…", file=sys.stderr)
+            log.info("Terminating openfortivpn…")
             try:
                 self.process.terminate()
                 self.process.wait()
@@ -193,7 +205,7 @@ class VpnSession:
                 pass
             self.process = None
 
-        print("[vpn] VPN stopped.", file=sys.stderr)
+        log.ok("VPN stopped.")
 
     def status(self):
         """Check if VPN is up."""

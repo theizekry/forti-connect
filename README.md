@@ -91,6 +91,9 @@ sudo vpn down
 # Check tunnel status
 vpn status
 
+# Re-open Outlook to refresh browser session (after cookie expiry)
+vpn login
+
 # Show loaded config
 vpn config
 ```
@@ -115,6 +118,7 @@ VPN_FORTIVPN_BIN=
 VPN_DNS_PRIMARY=10.10.0.1
 VPN_DNS_SECONDARY=10.10.0.2
 VPN_DNS_METHOD=auto          # auto | resolvectl | resolv | networksetup
+VPN_ACTIVE_SERVICE=Wi-Fi    # macOS only: networksetup service name (Wi-Fi or Ethernet)
 
 # OTP email
 VPN_OTP_SENDER=DoNotReply@fortinet-notifications.com
@@ -183,10 +187,10 @@ pipx install forti-connect --force --pip-args="--force-reinstall git+https://git
 Restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`).
 
 **`sudo vpn up` says command not found**
-The installer writes `/etc/sudoers.d/af-vpn` to fix this automatically.
+The installer writes `/etc/sudoers.d/forti-connect` to fix this automatically.
 If it failed, run the installer again or add it manually:
 ```bash
-sudo visudo -f /etc/sudoers.d/af-vpn
+sudo visudo -f /etc/sudoers.d/forti-connect
 # Add: Defaults secure_path="<dirname of vpn binary>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 ```
 
@@ -199,12 +203,22 @@ sudo apt install openfortivpn  # Linux
 **OTP fetch timed out**
 Outlook cookies may have expired. Re-login:
 ```bash
-vpn setup
+vpn login
 ```
 
 **VPN connects but DNS is wrong**
 Check `VPN_DNS_PRIMARY` / `VPN_DNS_SECONDARY` in `~/.config/forti-connect/.env`.
 Force a specific method: `VPN_DNS_METHOD=resolvectl` (Linux) or `VPN_DNS_METHOD=networksetup` (macOS).
+
+**macOS: DNS not applied**
+Set `VPN_ACTIVE_SERVICE` to your active interface name. To find it:
+```bash
+networksetup -listallnetworkservices
+```
+Then add to `~/.config/forti-connect/.env`:
+```bash
+VPN_ACTIVE_SERVICE=Wi-Fi   # or Ethernet, Thunderbolt Ethernet, etc.
+```
 
 ---
 

@@ -34,11 +34,15 @@ class DnsBackend(ABC):
 class ResolvectlBackend(DnsBackend):
     """systemd-resolved backend (Linux)."""
 
+    def __init__(self, config):
+        super().__init__(config)
+        self.interface = config.get("VPN_VPN_INTERFACE", "ppp0")
+
     def apply(self):
         """Set DNS via resolvectl."""
         for server in self.dns_servers:
             subprocess.run(
-                ["sudo", "resolvectl", "dns", "tun0", server],
+                ["resolvectl", "dns", self.interface, server],
                 check=True,
                 capture_output=True,
             )
@@ -46,7 +50,7 @@ class ResolvectlBackend(DnsBackend):
     def restore(self):
         """Restore DNS via resolvectl."""
         subprocess.run(
-            ["sudo", "resolvectl", "dns", "tun0", "--reset"],
+            ["resolvectl", "dns", self.interface, "--reset"],
             check=False,
             capture_output=True,
         )
@@ -56,7 +60,7 @@ class ResolvBackend(DnsBackend):
     """Direct /etc/resolv.conf backend (Linux fallback)."""
 
     RESOLV_CONF = Path("/etc/resolv.conf")
-    BACKUP_DIR = Path("/tmp/af-vpn-dns")
+    BACKUP_DIR = Path("/tmp/forti-connect-dns")
 
     def apply(self):
         """Backup /etc/resolv.conf and apply new DNS."""
@@ -91,13 +95,12 @@ class NetworksetupBackend(DnsBackend):
 
     def __init__(self, config):
         super().__init__(config)
-        self.service = config.get("VPN_ACTIVE_SERVICE", "Automatic")
+        self.service = config.get("VPN_ACTIVE_SERVICE", "Wi-Fi")
 
     def apply(self):
         """Set DNS via networksetup."""
-        dns_str = " ".join(self.dns_servers)
         subprocess.run(
-            ["networksetup", "-setdnsservers", self.service, dns_str],
+            ["networksetup", "-setdnsservers", self.service] + self.dns_servers,
             check=True,
             capture_output=True,
         )

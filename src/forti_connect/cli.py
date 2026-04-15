@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import platform
+from . import log, otp, platform
 from .config import config_path, get_config, load_config
 from .vpn import VpnSession
 
@@ -48,9 +48,9 @@ def cmd_down(args):
             for pid in pids:
                 try:
                     os.kill(int(pid), 15)  # SIGTERM
-                    print(f"[vpn] Killed openfortivpn (PID {pid})", file=sys.stderr)
+                    log.info(f"Killed openfortivpn (PID {pid})")
                 except Exception as e:
-                    print(f"[vpn] Warning: Failed to kill PID {pid}: {e}", file=sys.stderr)
+                    log.warn(f"Failed to kill PID {pid}: {e}")
 
         # Restore DNS
         try:
@@ -61,11 +61,11 @@ def cmd_down(args):
             from .dns import get_dns_backend
             dns = get_dns_backend(dns_method, config)
             dns.restore()
-            print("[vpn] DNS restored", file=sys.stderr)
+            log.ok("DNS restored")
         except Exception as e:
-            print(f"[vpn] Warning: DNS restore failed: {e}", file=sys.stderr)
+            log.warn(f"DNS restore failed: {e}")
 
-        print("[vpn] VPN stopped", file=sys.stderr)
+        log.ok("VPN stopped")
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -80,17 +80,20 @@ def cmd_status(args):
         )
         if result.returncode == 0:
             print("Status: UP")
-            # Try to show tunnel interface
-            try:
-                result = subprocess.run(
-                    ["ip", "link", "show", "tun0"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
-                    print(f"Interface: tun0")
-            except Exception:
-                pass
+            # Try to show tunnel interface (Linux only — macOS lacks `ip`)
+            if platform.detect_os() == "linux":
+                try:
+                    config = get_config()
+                    iface = config.get("VPN_VPN_INTERFACE", "ppp0")
+                    r2 = subprocess.run(
+                        ["ip", "link", "show", iface],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if r2.returncode == 0:
+                        print(f"Interface: {iface}")
+                except Exception:
+                    pass
         else:
             print("Status: DOWN")
     except Exception as e:
@@ -102,10 +105,10 @@ def cmd_setup(args):
     """vpn setup — Interactive first-run setup."""
     from .config import env_path as find_env
 
-    print("\n=== af-vpn-connect Setup ===\n")
+    print("\n=== forti-connect Setup ===\n")
 
     # Determine .env location
-    default_env = Path.home() / ".config" / "af-vpn" / ".env"
+    default_env = Path.home() / ".config" / "forti-connect" / ".env"
     try:
         existing = find_env()
         print(f"Existing .env found: {existing}")
@@ -128,10 +131,15 @@ def cmd_setup(args):
         print(f"Warning: path '{vpn_config}' does not exist yet — you can edit the .env later.", file=sys.stderr)
 
     # Optional settings
+    _default_bin = (
+        "/opt/homebrew/bin/openfortivpn"
+        if platform.detect_os() == "macos"
+        else "/usr/bin/openfortivpn"
+    )
     print("\nOptional settings (press Enter to keep defaults):")
     fortivpn_bin = input(
-        "openfortivpn binary [/opt/homebrew/bin/openfortivpn]: "
-    ).strip() or "/opt/homebrew/bin/openfortivpn"
+        f"openfortivpn binary [{_default_bin}]: "
+    ).strip() or _default_bin
     dns_primary = input("Primary DNS [leave blank to skip]: ").strip()
     dns_secondary = input("Secondary DNS [leave blank to skip]: ").strip()
     otp_sender = input(
@@ -140,7 +148,7 @@ def cmd_setup(args):
 
     # Build .env content
     lines = [
-        "# af-vpn-connect configuration",
+        "# forti-connect configuration",
         f"VPN_FORTIVPN_BIN={fortivpn_bin}",
         f"VPN_CONFIG={vpn_config}",
         "",
@@ -187,11 +195,9 @@ def cmd_setup(args):
     print("\nOpening Outlook Web for one-time login…")
     print("Log in to Outlook in the browser that opens, then close it.")
     try:
-        os.environ["VPN_BROWSER_VISIBLE"] = "true"
-        from . import otp
         cfg = get_config(cfg_path)
-        otp.fetch_otp(cfg)
-        print("✓ Outlook login complete")
+        otp.open_browser_for_login(cfg)
+        print("✓ Outlook browser session saved — you can now run: sudo vpn up")
     except Exception as e:
         print(f"Warning: Outlook setup failed: {e}", file=sys.stderr)
         print("Run 'vpn setup' again to retry.", file=sys.stderr)
@@ -199,9 +205,20 @@ def cmd_setup(args):
     # Sudoers hint
     print("\n=== Sudoers Setup ===")
     print("To use 'sudo vpn up' without PATH issues, run once:")
-    print(f"\n  sudo visudo -f /etc/sudoers.d/af-vpn")
+    print(f"\n  sudo visudo -f /etc/sudoers.d/forti-connect")
     print(f"  # Add: Defaults secure_path=\"{Path.home()}/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin\"")
     print("\nSetup complete! Run: sudo vpn up")
+
+
+def cmd_login(args):
+    """vpn login — Open Outlook Web to refresh the browser session (re-login)."""
+    try:
+        config = get_config()
+        otp.open_browser_for_login(config)
+        print("✓ Browser session saved.")
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def cmd_config(args):
@@ -223,7 +240,7 @@ def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="vpn",
-        description="af-vpn-connect: Automated FortiVPN with OTP",
+        description="forti-connect: Automated FortiVPN with OTP",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command")
@@ -240,6 +257,9 @@ def main():
     # vpn setup
     subparsers.add_parser("setup", help="Interactive first-run setup")
 
+    # vpn login
+    subparsers.add_parser("login", help="Re-open Outlook Web to refresh browser session")
+
     # vpn config
     subparsers.add_parser("config", help="Show current configuration")
 
@@ -253,6 +273,8 @@ def main():
         cmd_status(args)
     elif args.command == "setup":
         cmd_setup(args)
+    elif args.command == "login":
+        cmd_login(args)
     elif args.command == "config":
         cmd_config(args)
     else:

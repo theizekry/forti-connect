@@ -1,47 +1,14 @@
 """OTP extraction from Outlook Web via Playwright."""
 
-import os
 import re
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-# --- Colored logging ---
-
-RESET = "\033[0m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RED = "\033[31m"
-GREEN = "\033[32m"
-YELLOW = "\033[33m"
-CYAN = "\033[36m"
-
-
-def _ts():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def log_info(msg):
-    print(f"{DIM}[{_ts()}]{RESET} {CYAN}{BOLD}INFO{RESET}  {CYAN}{msg}{RESET}", file=sys.stderr)
-
-
-def log_success(msg):
-    print(f"{DIM}[{_ts()}]{RESET} {GREEN}{BOLD}OK{RESET}    {GREEN}{msg}{RESET}", file=sys.stderr)
-
-
-def log_warn(msg):
-    print(f"{DIM}[{_ts()}]{RESET} {YELLOW}{BOLD}WARN{RESET}  {YELLOW}{msg}{RESET}", file=sys.stderr)
-
-
-def log_error(msg):
-    print(f"{DIM}[{_ts()}]{RESET} {RED}{BOLD}ERROR{RESET} {RED}{msg}{RESET}", file=sys.stderr)
-
-
-def log_dim(msg):
-    print(f"{DIM}    {msg}{RESET}", file=sys.stderr)
+from . import log
+from .log import BOLD, DIM, RESET
 
 
 # --- Helper functions ---
@@ -101,11 +68,9 @@ def get_topmost_otp(page, sender):
         email_items = find_sender_emails(page, sender)
         if email_items is None:
             return None
-
         if email_items.count() == 0:
             return None
 
-        # Only check the first (topmost = newest) email
         item = email_items.nth(0)
         item.click(timeout=3000)
         time.sleep(1)
@@ -114,7 +79,7 @@ def get_topmost_otp(page, sender):
         return extract_otp_from_text(body)
 
     except Exception as e:
-        log_warn(f"Error scanning inbox: {e}")
+        log.warn(f"Error scanning inbox: {e}")
 
     return None
 
@@ -129,47 +94,62 @@ def refresh_inbox(page):
 
 
 def poll_for_otp(page, config):
-    """Poll the inbox for a NEW OTP email. Returns the OTP code or None.
-
-    First captures the existing (stale) OTP if any, then polls until
-    a different OTP appears at the top of the inbox. On timeout, falls
-    back to the stale OTP since it may actually be the current valid one
-    (e.g. the email arrived before polling started).
-    """
+    """Poll the inbox for a NEW OTP email. Returns the OTP code or None."""
     sender = config.get("VPN_OTP_SENDER", "noreply@company.com")
     timeout = int(config.get("VPN_OTP_TIMEOUT", "30"))
     poll_interval = int(config.get("VPN_OTP_POLL_INTERVAL", "2"))
 
-    # Capture the existing OTP (will use as fallback if no fresh one arrives)
     stale_otp = get_topmost_otp(page, sender)
     if stale_otp:
-        log_info(f"Existing OTP found: {BOLD}{stale_otp}{RESET} (will use as fallback)")
+        log.info(f"Existing OTP found: {BOLD}{stale_otp}{RESET} — will use as fallback if no fresh one arrives")
     else:
-        log_info("No existing OTP email, waiting for fresh one…")
+        log.info("No existing OTP email — waiting for a fresh one…")
 
     elapsed = 0
     while elapsed < timeout:
         refresh_inbox(page)
-
         current_otp = get_topmost_otp(page, sender)
 
         if current_otp and current_otp != stale_otp:
-            log_success(f"Fresh OTP detected: {BOLD}{current_otp}{RESET}")
+            log.ok(f"OTP received: {BOLD}{current_otp}{RESET}")
             return current_otp
 
         remaining = timeout - elapsed
-        log_dim(f"Polling… {elapsed}s elapsed, {remaining}s remaining")
+        log.dim(f"Polling… {elapsed}s elapsed, {remaining}s remaining")
         time.sleep(poll_interval)
         elapsed += poll_interval
 
-    # No fresh OTP arrived, but the stale one might be the valid current
-    # code (e.g. the email arrived before polling started). Try it rather
-    # than forcing manual entry.
     if stale_otp:
-        log_warn(f"Timeout — using existing OTP as fallback: {BOLD}{stale_otp}{RESET}")
+        log.warn(f"No fresh OTP arrived — using existing: {BOLD}{stale_otp}{RESET}")
         return stale_otp
 
     return None
+
+
+def open_browser_for_login(config):
+    """Open a visible browser to Outlook Web for manual login. Blocks until closed."""
+    browser_profile = str(Path(config.get(
+        "VPN_BROWSER_USER_DATA_DIR",
+        str(Path.home() / ".vpn-otp-browser-profile"),
+    )).expanduser())
+
+    log.dim(f"Profile: {browser_profile}")
+
+    with sync_playwright() as p:
+        context = p.firefox.launch_persistent_context(
+            user_data_dir=browser_profile,
+            headless=False,
+            ignore_https_errors=True,
+        )
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto("https://outlook.office.com/mail/", wait_until="load")
+            log.info("Browser open — log in to Outlook, then close the window when done.")
+            page.wait_for_event("close", timeout=0)
+        except Exception:
+            pass
+        finally:
+            context.close()
 
 
 def fetch_otp(config):
@@ -187,16 +167,10 @@ def fetch_otp(config):
         str(Path.home() / ".vpn-otp-browser-profile"),
     )).expanduser())
     browser_visible = config.get("VPN_BROWSER_VISIBLE", "false").lower() == "true"
-    sender = config.get("VPN_OTP_SENDER", "noreply@company.com")
     wait_before_inbox = int(config.get("VPN_WAIT_BEFORE_INBOX", "7"))
 
-    print(file=sys.stderr)
-    log_info(
-        f"OTP Fetch  |  sender={BOLD}{sender}{RESET}  "
-        f"timeout={BOLD}{config.get('VPN_OTP_TIMEOUT', '30')}s{RESET}  "
-        f"headless={BOLD}{not browser_visible}{RESET}"
-    )
-    log_dim(f"Profile: {browser_profile}")
+    log.info(f"Opening Outlook inbox{'  (visible)' if browser_visible else ''}…")
+    log.dim(f"Profile: {browser_profile}")
 
     with sync_playwright() as p:
         context = p.firefox.launch_persistent_context(
@@ -206,19 +180,16 @@ def fetch_otp(config):
         )
         try:
             page = context.pages[0] if context.pages else context.new_page()
-
-            log_info("Opening Outlook Web…")
             page.goto("https://outlook.office.com/mail/", wait_until="load")
 
-            log_dim(f"Waiting {wait_before_inbox}s for inbox to load…")
+            log.dim(f"Waiting {wait_before_inbox}s for inbox to load…")
             time.sleep(wait_before_inbox)
 
             otp = poll_for_otp(page, config)
             if otp:
-                log_success(f"OTP ready: {BOLD}{otp}{RESET}")
                 return otp
 
-            log_error("Timed out — no OTP email found")
+            log.error("Timed out — no OTP email found")
             return None
 
         finally:

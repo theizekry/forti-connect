@@ -18,14 +18,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 def mock_config():
     """Provide a basic mock config dict."""
     return {
-        "VPN_GATEWAY": "vpn.test.com",
-        "VPN_USER": "testuser",
-        "VPN_PASSWORD": "testpass",
         "VPN_OTP_SENDER": "otp@test.com",
         "VPN_DNS_SERVERS": "1.1.1.1 1.0.0.1",
         "VPN_DNS_METHOD": "auto",
         "VPN_BROWSER_VISIBLE": "false",
-        "VPN_BROWSER_PROFILE": "/tmp/test-profile",
         "VPN_OTP_TIMEOUT": "30",
         "VPN_OTP_POLL_INTERVAL": "2",
     }

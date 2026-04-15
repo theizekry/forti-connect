@@ -131,21 +131,13 @@ class TestCmdConfig:
     """Test 'vpn config' command."""
 
     def test_prints_config(self, mock_config, capsys):
-        with patch("forti_connect.cli.get_config", return_value=mock_config):
+        with patch("forti_connect.cli.get_config", return_value=mock_config), \
+             patch("forti_connect.config.env_path", return_value="/mock/.env"):
             cli.cmd_config(MagicMock())
 
             captured = capsys.readouterr()
-            assert "VPN_GATEWAY" in captured.out
-            assert "vpn.test.com" in captured.out
-
-    def test_redacts_password(self, mock_config, capsys):
-        with patch("forti_connect.cli.get_config", return_value=mock_config):
-            cli.cmd_config(MagicMock())
-
-            captured = capsys.readouterr()
-            # Password should be redacted
-            assert "testpass" not in captured.out
-            assert "***" in captured.out
+            assert "VPN_OTP_SENDER" in captured.out
+            assert "otp@test.com" in captured.out
 
     def test_exits_when_config_missing(self):
         with patch("forti_connect.cli.get_config", side_effect=FileNotFoundError("Not found")):
@@ -158,11 +150,12 @@ class TestCmdSetup:
     """Test 'vpn setup' command."""
 
     def test_creates_config_directory(self):
-        with patch("forti_connect.cli.input", side_effect=["vpn.test.com", "user", "pass"]), \
+        with patch("forti_connect.cli.input", side_effect=["", "", "", "", ""]), \
              patch("forti_connect.cli.Path.home"), \
              patch("builtins.open", create=True), \
              patch("forti_connect.cli.subprocess.run"), \
              patch("forti_connect.cli.os.environ"), \
+             patch("forti_connect.cli.get_config", return_value={}), \
              patch("forti_connect.cli.otp.fetch_otp"):
 
             args = MagicMock()

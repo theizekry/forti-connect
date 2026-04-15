@@ -33,3 +33,4 @@ Thumbs.db
 venv/
 .claude
 CLAUDE.md
+src/forti_connect/log.py
